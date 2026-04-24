@@ -23,16 +23,20 @@ class ServerlessPlugin {
       properties: { enableScheduleDlq: { type: "boolean" } },
     });
 
-    serverless.configSchemaHandler.defineFunctionEventProperties("aws", "schedule", {
-      type: "object",
-      properties: { enableScheduleDlq: { type: "boolean" } },
-    });
+    serverless.configSchemaHandler.defineFunctionEventProperties(
+      "aws",
+      "schedule",
+      {
+        type: "object",
+        properties: { enableScheduleDlq: { type: "boolean" } },
+      },
+    );
   }
 
   _validateQueueName = (queueName) => {
     if (queueName.length > 80) {
       this.logger.error(
-        `Generated queue name [${queueName}] is longer than 80 characters.`
+        `Generated queue name [${queueName}] is longer than 80 characters.`,
       );
       process.exit(1);
     }
@@ -44,17 +48,16 @@ class ServerlessPlugin {
     const template =
       this.serverless.service.provider.compiledCloudFormationTemplate;
 
-    Object.entries(functions).flatMap(
-      async ([fnName, fnDef]) => {
-        if (fnDef.enableScheduleDlq !== false) {
-          const scheduleEvents = (fnDef.events || [])
-            .filter((evt) => (evt.schedule))
-            .map((evt) => evt.schedule);
+    Object.entries(functions).flatMap(async ([fnName, fnDef]) => {
+      if (fnDef.enableScheduleDlq !== false) {
+        const scheduleEvents = (fnDef.events || [])
+          .filter((evt) => evt.schedule)
+          .map((evt) => evt.schedule);
 
-          if (scheduleEvents.length > 0) this._configure(accountId, template, fnName, fnDef, scheduleEvents);
-        }
+        if (scheduleEvents.length > 0)
+          this._configure(accountId, template, fnName, fnDef, scheduleEvents);
       }
-    );
+    });
   };
 
   _configure = async (accountId, template, fnName, fnDef, scheduleEvents) => {
@@ -88,15 +91,16 @@ class ServerlessPlugin {
     scheduleEvents.forEach((sched, i) => {
       const ruleId = pascalCase(`${fnName}EventsRuleSchedule${i + 1}`);
 
-      console.log(ruleId)
       const ruleDef = template.Resources[ruleId];
-      ruleDef.Properties["Targets"] = ruleDef.Properties["Targets"].map((target) => {
-        return { ...target, DeadLetterConfig: { Arn: dlqArn } }
-      });
+      ruleDef.Properties["Targets"] = ruleDef.Properties["Targets"].map(
+        (target) => {
+          return { ...target, DeadLetterConfig: { Arn: dlqArn } };
+        },
+      );
 
       template.Resources[ruleId] = ruleDef;
-      ruleIds.push(ruleId)
-    })
+      ruleIds.push(ruleId);
+    });
 
     // Attach queue policy to the DLQ
     const queuePolicyId = pascalCase(`${fnName}SQSDeadLetterQueuePolicy`);
@@ -106,23 +110,51 @@ class ServerlessPlugin {
         Queues: [{ Ref: queueId }],
         PolicyDocument: {
           Version: "2012-10-17",
-          Statement: {
-            Effect: "Allow",
-            Principal: { Service: "events.amazonaws.com" },
-            Action: "sqs:SendMessage",
-            Resource: { "Fn::GetAtt": [queueId, "Arn"] },
-            Condition: {
-              ArnEquals: {
-                "aws:SourceArn": ruleIds.map((v) => {
-                  return { "Fn::GetAtt": [v, "Arn"] }
-                })
-              }
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: { Service: "events.amazonaws.com" },
+              Action: "sqs:SendMessage",
+              Resource: { "Fn::GetAtt": [queueId, "Arn"] },
+              Condition: {
+                ArnEquals: {
+                  "aws:SourceArn": ruleIds.map((v) => {
+                    return { "Fn::GetAtt": [v, "Arn"] };
+                  }),
+                },
+              },
             },
+            {
+              Effect: "Allow",
+              Principal: { Service: "lambda.amazonaws.com" },
+              Action: "sqs:SendMessage",
+              Resource: { "Fn::GetAtt": [queueId, "Arn"] },
+              Condition: {
+                ArnEquals: {
+                  "aws:SourceArn": { "Fn::GetAtt": [funcId, "Arn"] },
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    // Add Lambda async destination for invocation failures
+    const eventInvokeConfigId = pascalCase(`${fnName}EventInvokeConfig`);
+    template.Resources[eventInvokeConfigId] = {
+      Type: "AWS::Lambda::EventInvokeConfig",
+      Properties: {
+        FunctionName: { Ref: funcId },
+        Qualifier: "$LATEST",
+        DestinationConfig: {
+          OnFailure: {
+            Destination: { "Fn::GetAtt": [queueId, "Arn"] },
           },
         },
       },
-    }
-  }
+    };
+  };
 }
 
 module.exports = ServerlessPlugin;
