@@ -1,6 +1,6 @@
 {
   "name": "serverless-schedule-dlq",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automatically attach DLQ and its permission for every handler function specified with schedule trigger",
   "main": "index.js",
   "author": "Randy Hermawan",
